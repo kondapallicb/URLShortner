@@ -4,6 +4,17 @@ import java.util.List;
 
 // This bounded agent supports one declared capability; unsupported work must be clarified.
 public class AliasImplementationAgent {
+    public List<FileOperation> implement(RequirementSpec.AliasOptions options) {
+        return implement().stream().map(op -> new FileOperation(op.path(), op.content()
+                .replace("{3,64}", "{" + options.minLength() + "," + options.maxLength() + "}")
+                .replace("2592000", Long.toString(options.ttlSeconds()))
+                .replace("request.alias().equals(\"api\") || request.alias().equals(\"actuator\")",
+                        options.reservedAliases().stream().noneMatch(value -> value.length() >= options.minLength() && value.length() <= options.maxLength()) ? "false" : options.reservedAliases().stream()
+                            .filter(value -> value.length() >= options.minLength() && value.length() <= options.maxLength())
+                            .map(value -> "request.alias().equals(\"" + value + "\")").collect(java.util.stream.Collectors.joining(" || ")))
+                .replace("[A-Za-z0-9_-]", options.alphabet() == RequirementSpec.AliasOptions.Alphabet.ALPHANUMERIC
+                        ? "[A-Za-z0-9]" : "[A-Za-z0-9_-]"))).toList();
+    }
     public List<FileOperation> implement() {
         return List.of(new FileOperation(
                 "src/main/java/com/kondapallicb/urlshortener/api/CustomAliasController.java", """
@@ -31,15 +42,13 @@ public class AliasImplementationAgent {
                     @ResponseStatus(HttpStatus.CREATED)
                     public ShortUrl create(@Valid @RequestBody Request request) {
                         if (request.alias().equals("api") || request.alias().equals("actuator")) {
-                            throw new ResponseStatusException(HttpStatus.CONFLICT, "Reserved alias");
+                            throw new SlugConflictException(request.alias());
                         }
                         Instant now = Instant.now(clock);
                         ShortUrl mapping = new ShortUrl(request.alias(), URI.create(request.longUrl()),
                             now, now.plusSeconds(2592000));
                         try { return repository.save(mapping); }
-                        catch (IllegalStateException conflict) {
-                            throw new ResponseStatusException(HttpStatus.CONFLICT, "Alias already exists");
-                        }
+                        catch (SlugConflictException conflict) { throw conflict; }
                     }
                 }
                 """));

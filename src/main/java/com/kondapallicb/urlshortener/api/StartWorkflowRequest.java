@@ -6,6 +6,10 @@ import jakarta.validation.constraints.NotNull;
 
 public record StartWorkflowRequest(
         @NotNull WorkflowScenario scenario,
-        @NotBlank String requirement
+        String requirement,
+        com.kondapallicb.urlshortener.orchestration.RequirementSpec specification
 ) {
+    public StartWorkflowRequest(com.kondapallicb.urlshortener.orchestration.WorkflowScenario scenario, String requirement) {
+        this(scenario, requirement, null);
+    }
 }

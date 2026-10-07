@@ -23,8 +23,9 @@ class DefaultWorkflowEngineTest {
 
     @Test
     void startsAndStopsAtArchitectureApprovalGate() {
-        when(execution.supports(anyString())).thenReturn(true);
+        when(execution.isReady(anyString())).thenReturn(true);
         when(execution.plan(anyString())).thenReturn(java.util.List.of("Analyzed plan"));
+        when(execution.graph(anyString(), any())).thenReturn(WorkflowGraph.defaultGraph());
         WorkflowRun run = engine.start(WorkflowScenario.GREENFIELD, "Build URL shortener");
 
         assertThat(run.state()).isEqualTo(ExecutionState.WAITING_FOR_APPROVAL);
@@ -38,11 +39,12 @@ class DefaultWorkflowEngineTest {
 
     @Test
     void approvalAdvancesWorkflowToReleaseGateThenCompletion() {
-        when(execution.supports(anyString())).thenReturn(true);
+        when(execution.isReady(anyString())).thenReturn(true);
         when(execution.plan(anyString())).thenReturn(java.util.List.of("Analyzed plan"));
+        when(execution.graph(anyString(), any())).thenReturn(WorkflowGraph.defaultGraph());
         var evidence = new ExecutionEvidence("run", "requirement", "baseline", "outcome", "workspace",
                 java.util.List.of("source"), java.util.List.of(), false, "VALIDATED_NOT_RELEASE_APPROVED", "artifact.jar", "hash");
-        when(execution.execute(anyString(), anyString())).thenReturn(evidence);
+        when(execution.execute(anyString(), anyString(), any())).thenReturn(evidence);
         when(execution.evidence(anyString())).thenReturn(evidence);
         WorkflowRun run = engine.start(WorkflowScenario.BROWNFIELD, "Add analytics endpoint");
 
@@ -60,18 +62,26 @@ class DefaultWorkflowEngineTest {
     }
 
     @Test
-    void ambiguousScenarioCapturesClarificationAndSafeStopCriteria() {
-        when(execution.plan(anyString())).thenReturn(java.util.List.of("Clarification required"));
-        WorkflowRun run = engine.start(WorkflowScenario.AMBIGUOUS, "Support branded short links");
+    void unresolvedRequirementStopsWithActualInterpretationNotScenarioNotes() {
+        String requirement = "Add custom aliases and support an undefined proprietary ownership protocol.";
+        when(execution.plan(requirement)).thenReturn(java.util.List.of("Unsupported ownership protocol; specify its verification contract"));
+        WorkflowRun run = engine.start(WorkflowScenario.BROWNFIELD, requirement);
 
-        assertThat(run.demonstration().ambiguityNotes())
-                .contains("Brand ownership verification is undefined");
         assertThat(run.nodeRuns().get(WorkflowStage.REQUIREMENTS).outputs())
-                .contains("Brand ownership verification is undefined");
-        assertThat(run.demonstration().orchestrationPath())
-                .contains("safe-stop if ownership policy remains undefined");
+                .contains("Unsupported ownership protocol; specify its verification contract")
+                .doesNotContain("Brand ownership verification is undefined");
         assertThat(run.state()).isEqualTo(ExecutionState.SAFE_STOPPED);
         assertThat(run.pendingApprovals()).isEmpty();
-        verify(execution, never()).execute(anyString(), anyString());
+        verify(execution, never()).execute(anyString(), anyString(), any());
+    }
+
+    @Test
+    void scenarioLabelDoesNotOverrideReadyRequirements() {
+        when(execution.isReady(anyString())).thenReturn(true);
+        when(execution.plan(anyString())).thenReturn(java.util.List.of("Analyzed plan"));
+        when(execution.graph(anyString(), any())).thenReturn(WorkflowGraph.defaultGraph());
+        var run = engine.start(WorkflowScenario.AMBIGUOUS, "Add custom aliases");
+        assertThat(run.state()).isEqualTo(ExecutionState.WAITING_FOR_APPROVAL);
+        assertThat(run.pendingApprovals().getFirst().name()).isEqualTo("architecture-review");
     }
 }

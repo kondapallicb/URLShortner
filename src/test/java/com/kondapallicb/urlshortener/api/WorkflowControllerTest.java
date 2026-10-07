@@ -44,6 +44,41 @@ class WorkflowControllerTest {
     @MockBean
     private ScenarioCatalog scenarioCatalog;
 
+    @Test
+    void operatorCannotApproveSecurityGate() throws Exception {
+        var run = sampleRun();
+        var securityRun = new WorkflowRun(run.runId(), run.scenario(), run.requirement(), run.demonstration(),
+                run.state(), run.graph(), run.policy(), run.nodeRuns(), run.decisions(),
+                List.of(new com.kondapallicb.urlshortener.orchestration.ApprovalGate("security-review", "review", true, false, null, null)),
+                run.metrics(), run.startedAt(), run.updatedAt());
+        when(workflowEngine.get("run-1")).thenReturn(securityRun);
+        mockMvc.perform(post("/api/workflows/run-1/approvals").principal(() -> "operator")
+                        .with(request -> { request.addUserRole("OPERATOR"); return request; })
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"evidenceHash\":\"hash\",\"comment\":\"approve\"}"))
+                .andExpect(status().isForbidden());
+        org.mockito.Mockito.verify(workflowEngine, org.mockito.Mockito.never()).approve(any(), any(), any(), any());
+    }
+
+    @Test
+    void unknownAcceptanceOptionsAreRejectedBeforeWorkflowStart() throws Exception {
+        mockMvc.perform(post("/api/workflows").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scenario\":\"GREENFIELD\",\"specification\":{\"capabilities\":[\"CUSTOM_ALIAS\"],\"caseInsensitive\":true}}"))
+                .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verify(workflowEngine, org.mockito.Mockito.never()).start(any(), any());
+    }
+
+    @Test
+    void structuredClarificationPreservesAcceptanceSpecification() throws Exception {
+        when(workflowEngine.clarify(eq("run-1"), any())).thenReturn(sampleRun());
+        mockMvc.perform(post("/api/workflows/run-1/clarifications").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"specification\":{\"capabilities\":[\"UTC_DAILY_ANALYTICS\"],\"acceptanceCriteria\":[\"UTC_DAY_BOUNDARIES\"]}}"))
+                .andExpect(status().isOk());
+        var capture = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(workflowEngine).clarify(eq("run-1"), capture.capture());
+        org.assertj.core.api.Assertions.assertThat(new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(capture.getValue()).get("acceptanceCriteria").get(0).asText()).isEqualTo("UTC_DAY_BOUNDARIES");
+    }
+
     @MockBean
     private com.kondapallicb.urlshortener.orchestration.WorkspaceExecutionService execution;
 
@@ -67,9 +102,11 @@ class WorkflowControllerTest {
     @Test
     void approvesWorkflowGate() throws Exception {
         when(workflowEngine.approve(eq("run-1"), eq("lead"), eq("approved"), eq("hash"))).thenReturn(sampleRun());
+        when(workflowEngine.get("run-1")).thenReturn(sampleRun());
 
         mockMvc.perform(post("/api/workflows/run-1/approvals")
                         .principal(() -> "lead")
+                        .with(request -> { request.addUserRole("OPERATOR"); return request; })
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {

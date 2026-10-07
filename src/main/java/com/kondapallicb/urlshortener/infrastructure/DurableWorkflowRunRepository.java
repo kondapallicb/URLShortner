@@ -1,52 +1,43 @@
 package com.kondapallicb.urlshortener.infrastructure;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.kondapallicb.urlshortener.orchestration.WorkflowRun;
-import com.kondapallicb.urlshortener.orchestration.WorkflowRunRepository;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import com.kondapallicb.urlshortener.orchestration.*;
 import java.util.Optional;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Repository;
+import org.springframework.jdbc.core.JdbcTemplate;
+import javax.sql.DataSource;
 
 @Repository
 public class DurableWorkflowRunRepository implements WorkflowRunRepository {
-    private final Path directory;
+    private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
-    public DurableWorkflowRunRepository(@Value("${app.storage.directory:./data}") String directory, ObjectMapper mapper) {
-        this.directory = Path.of(directory).resolve("runs").toAbsolutePath();
+    @org.springframework.beans.factory.annotation.Autowired
+    public DurableWorkflowRunRepository(DataSource source, ObjectMapper mapper) {
+        jdbc = new JdbcTemplate(source);
         this.mapper = mapper;
+        WorkflowOwnershipStore.schema(jdbc);
     }
-    private Path path(String id) {
-        if (!id.matches("[a-zA-Z0-9-]+")) throw new IllegalArgumentException("Invalid run ID");
-        return directory.resolve(id + ".json");
-    }
-    @Override public synchronized WorkflowRun save(WorkflowRun run) {
-        Path target = path(run.runId());
+    public DurableWorkflowRunRepository(String directory, ObjectMapper mapper) { this(WorkflowOwnershipStore.local(directory), mapper); }
+    @Override public WorkflowRun save(WorkflowRun run) {
+        if (!run.runId().matches("[a-zA-Z0-9-]+")) throw new IllegalArgumentException("Invalid run ID");
+        var next = run.withVersion(run.version() + 1);
         try {
-            Files.createDirectories(directory);
-            Path temporary = Files.createTempFile(directory, "run-", ".tmp");
-            mapper.writeValue(temporary.toFile(), run);
-            Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            return run;
-        } catch (IOException exception) { throw new IllegalStateException("Cannot persist workflow", exception); }
+            String payload = mapper.writeValueAsString(next);
+            if (run.version() == 0) jdbc.update("INSERT INTO workflow_runs(run_id,version,payload) VALUES (?,?,?)", run.runId(), 1, payload);
+            else if (jdbc.update("UPDATE workflow_runs SET version=?,payload=? WHERE run_id=? AND version=?",
+                    next.version(), payload, run.runId(), run.version()) != 1)
+                throw new IllegalStateException("Stale workflow state transition");
+            return next;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException invalid) { throw new IllegalStateException(invalid); }
     }
-    @Override public synchronized Optional<WorkflowRun> findById(String id) {
-        Path target = path(id);
-        if (!Files.exists(target)) return Optional.empty();
-        try { return Optional.of(mapper.readValue(target.toFile(), WorkflowRun.class)); }
-        catch (IOException exception) { throw new IllegalStateException("Cannot read workflow", exception); }
+    @Override public Optional<WorkflowRun> findById(String id) {
+        return jdbc.queryForList("SELECT payload FROM workflow_runs WHERE run_id=?", String.class, id).stream().findFirst().map(this::read);
     }
-    @Override public synchronized java.util.List<WorkflowRun> all() {
-        if (!Files.isDirectory(directory)) return java.util.List.of();
-        try (var paths = Files.list(directory)) {
-            var runs = new java.util.ArrayList<WorkflowRun>();
-            for (Path path : paths.filter(p -> p.toString().endsWith(".json")).toList()) {
-                runs.add(mapper.readValue(path.toFile(), WorkflowRun.class));
-            }
-            return java.util.List.copyOf(runs);
-        } catch (IOException exception) { throw new IllegalStateException("Cannot read workflow history", exception); }
+    @Override public java.util.List<WorkflowRun> all() {
+        return jdbc.queryForList("SELECT payload FROM workflow_runs ORDER BY run_id", String.class).stream().map(this::read).toList();
+    }
+    private WorkflowRun read(String payload) {
+        try { return mapper.readValue(payload, WorkflowRun.class); }
+        catch (Exception invalid) { throw new IllegalStateException("Invalid durable workflow", invalid); }
     }
 }

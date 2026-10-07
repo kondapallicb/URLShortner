@@ -29,9 +29,19 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
     @Override
     public WorkflowRun start(WorkflowScenario scenario, String requirement) {
         Instant now = Instant.now(clock);
-        WorkflowGraph graph = WorkflowGraph.defaultGraph();
+        WorkflowGraph graph = new WorkflowGraph(List.of(new WorkflowNode(WorkflowStage.REQUIREMENTS, List.of(),
+            List.of("Captured requirement"), List.of("Explicit interpreted criteria"), null, false)));
         ScenarioDemonstration demonstration = scenarioCatalog.findByScenario(scenario)
                 .orElseThrow(() -> new IllegalArgumentException("Unsupported scenario: " + scenario));
+        String normalizedRequirement = requirement == null || requirement.isBlank() ? demonstration.requirement() : requirement;
+        if (execution.isReady(normalizedRequirement)) {
+            try {
+                WorkflowGraph planned = execution.graph(normalizedRequirement, GovernancePolicy.defaultPolicy());
+                if (planned != null) graph = planned;
+            } catch (RuntimeException incompatibleRepository) {
+                // Requirements execution records the repository-analysis failure as a safe stop.
+            }
+        }
         Map<WorkflowStage, WorkflowNodeRun> nodeRuns = new EnumMap<>(WorkflowStage.class);
         for (WorkflowNode node : graph.nodes()) {
             nodeRuns.put(node.stage(), WorkflowNodeRun.pending(node.stage()));
@@ -39,7 +49,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
         WorkflowRun run = new WorkflowRun(
                 UUID.randomUUID().toString(),
                 scenario,
-                requirement == null || requirement.isBlank() ? demonstration.requirement() : requirement,
+                normalizedRequirement,
                 demonstration,
                 ExecutionState.RUNNING,
                 graph,
@@ -74,6 +84,11 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 || !evidenceHash.equals(execution.approvalHash(run))) {
             throw new IllegalStateException("Approval does not match current evidence");
         }
+        if (run.pendingApprovals().stream().anyMatch(gate -> gate.name().equals("security-review"))
+                && run.decisions().stream().anyMatch(decision -> decision.decision().equals("APPROVED:architecture-review")
+                        && decision.approval() != null && decision.approval().operator().equals(approver))) {
+            throw new IllegalStateException("Security review requires an independent reviewer");
+        }
         List<ApprovalGate> approvals = run.pendingApprovals().stream()
                 .map(gate -> gate.approve(approver, comment))
                 .toList();
@@ -85,7 +100,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
             WorkflowNodeRun waitingNode = nodeRuns.get(stage);
             nodeRuns.put(stage, waitingNode.completed(now, waitingNode.outputs()));
             decisions.add(new DecisionRecord(now, stage, "APPROVED:" + approval.name(),
-                    "Operator=" + approver + "; evidence=" + evidenceHash + "; comment=" + approval.comment()));
+                    approval.comment(), new DecisionRecord.ApprovalAudit(approval.name(), approver, evidenceHash)));
         }
         WorkflowRun approved = new WorkflowRun(
                 run.runId(),
@@ -100,9 +115,10 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 List.of(),
                 metrics(run.startedAt(), nodeRuns, run.metrics().retryCount(), run.metrics().rollbackCount()),
                 run.startedAt(),
-                now
+                now,
+                run.version()
         );
-        repository.save(approved);
+        approved = repository.save(approved);
         return repository.save(advance(approved));
     }
 
@@ -115,8 +131,18 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 "SUPERSEDED", "Artifacts and approvals invalidated by revised requirement: " + requirement));
         repository.save(new WorkflowRun(previous.runId(), previous.scenario(), previous.requirement(), previous.demonstration(),
                 ExecutionState.SAFE_STOPPED, previous.graph(), previous.policy(), previous.nodeRuns(), decisions, List.of(),
-                previous.metrics(), previous.startedAt(), Instant.now(clock)));
-        return start(WorkflowScenario.GREENFIELD, requirement);
+                previous.metrics(), previous.startedAt(), Instant.now(clock), previous.version()));
+        var revised = start(previous.scenario() == WorkflowScenario.AMBIGUOUS ? WorkflowScenario.BROWNFIELD : previous.scenario(), requirement);
+        execution.lineage(previous.runId(), revised.runId(), requirement);
+        return revised;
+    }
+
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void reconcileInterruptedRuns() {
+        for (WorkflowRun run : repository.all()) if (run.state() == ExecutionState.RUNNING) {
+            try { repository.save(advance(run)); }
+            catch (RuntimeException unavailable) { /* Another owner or unavailable evidence must not imply readiness. */ }
+        }
     }
 
     private WorkflowRun advance(WorkflowRun run) {
@@ -148,9 +174,8 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
         int rollbacks = run.metrics().rollbackCount();
         try {
             outputs = outputsFor(run, node);
-            stopped = node.stage() == WorkflowStage.REQUIREMENTS
-                    && (run.scenario() == WorkflowScenario.AMBIGUOUS || !execution.supports(run.requirement()));
-            if (node.stage() == WorkflowStage.TESTING) {
+            stopped = node.stage() == WorkflowStage.REQUIREMENTS && !execution.isReady(run.requirement());
+            if (node.stage() == WorkflowStage.TESTING || node.stage() == WorkflowStage.IMPLEMENTATION) {
                 ExecutionEvidence evidence = execution.evidence(run.runId());
                 stopped = !evidence.readiness().equals("VALIDATED_NOT_RELEASE_APPROVED");
                 retries = Math.max(0, evidence.attempts().size() - 1);
@@ -160,6 +185,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
             outputs = List.of("Execution stopped: " + failure.getMessage());
             stopped = true;
         }
+        now = Instant.now(clock);
         boolean approvalRequired = node.approvalGate() != null
                 && node.approvalGate().required()
                 && run.pendingApprovals().isEmpty()
@@ -193,7 +219,8 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 pendingApprovals,
                 metrics(run.startedAt(), nodeRuns, retries, rollbacks),
                 run.startedAt(),
-                now
+                now,
+                run.version()
         );
     }
 
@@ -221,7 +248,8 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 run.pendingApprovals(),
                 metrics(run.startedAt(), run.nodeRuns(), run.metrics().retryCount(), run.metrics().rollbackCount()),
                 run.startedAt(),
-                Instant.now(clock)
+                Instant.now(clock),
+                run.version()
         );
     }
 
@@ -233,7 +261,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 if (!run.nodeRuns().get(WorkflowStage.ARCHITECTURE_DESIGN).outputs().equals(execution.plan(run.requirement()))) {
                     throw new IllegalStateException("Approved source plan changed; clarify and reapprove");
                 }
-                ExecutionEvidence evidence = execution.execute(run.runId(), run.requirement());
+                ExecutionEvidence evidence = execution.execute(run.runId(), run.requirement(), run.policy());
                 yield List.of("Applied files: " + evidence.changedFiles(), "Outcome SHA-256: " + evidence.outcomeHash(),
                         "Evidence: " + evidence.workspace());
             }
@@ -242,7 +270,15 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 yield List.of("Validation: " + evidence.readiness(), "Executed Maven attempts: " + evidence.attempts());
             }
             case DOCUMENTATION -> List.of("Durable operations.json and evidence.json record the change and validation");
-            case RELEASE_READINESS -> List.of("Validated outcome awaits authenticated approval of current evidence hash");
+            case SECURITY_REVIEW -> {
+                PolicyReport report = execution.policyReport(run.runId());
+                if (!report.passed()) throw new IllegalStateException("Generated changes fail security policy");
+                yield List.of("Security checks: " + report.checks(), "Independent security approval required");
+            }
+            case RELEASE_READINESS -> {
+                execution.requireReleasePolicy(run);
+                yield List.of("Validated outcome and security evidence await final approval");
+            }
         };
     }
 
@@ -250,10 +286,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
         List<String> outputs = new ArrayList<>();
         outputs.add("Scenario selected: " + run.demonstration().title());
         outputs.add("Requirement normalized: " + run.requirement());
-        outputs.addAll(run.demonstration().ambiguityNotes());
-        if (run.scenario() == WorkflowScenario.AMBIGUOUS || !execution.supports(run.requirement())) {
-            outputs.addAll(execution.plan(run.requirement()));
-        }
+        outputs.addAll(execution.plan(run.requirement()));
         return outputs;
     }
 

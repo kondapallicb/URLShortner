@@ -7,6 +7,18 @@ import org.springframework.mock.web.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RequestControlsTest {
+    @Test void securityCredentialCannotStartWorkflowsAndContextPathDoesNotBypassAuthentication() throws Exception {
+        var filter = new OperatorAuthenticationFilter("operator-token", "operator", "security-token", "security");
+        var request = new MockHttpServletRequest("POST", "/service/api/workflows");
+        request.setContextPath("/service");
+        var response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (req, res) -> { throw new AssertionError("Unauthenticated request passed"); });
+        assertThat(response.getStatus()).isEqualTo(401);
+        request.addHeader("Authorization", "Bearer security-token");
+        response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (req, res) -> { throw new AssertionError("Security role started a workflow"); });
+        assertThat(response.getStatus()).isEqualTo(403);
+    }
     @Test void rotatedForwardedHeadersDoNotBypassLimit() throws Exception {
         var filter = new RateLimitingFilter(1, 60, Clock.fixed(Instant.EPOCH, ZoneOffset.UTC));
         var count = new AtomicInteger();

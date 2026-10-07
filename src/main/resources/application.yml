@@ -1,4 +1,11 @@
 spring:
+  datasource:
+    url: ${WORKFLOW_JDBC_URL:jdbc:h2:file:${app.storage.directory}/workflow-db;DB_CLOSE_ON_EXIT=FALSE}
+    username: ${WORKFLOW_DB_USER:sa}
+    password: ${WORKFLOW_DB_PASSWORD:}
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
   application:
     name: url-shortener-agentic
 
@@ -19,6 +26,8 @@ app:
   operator:
     token: ${WORKFLOW_OPERATOR_TOKEN:}
     name: ${WORKFLOW_OPERATOR_NAME:operator}
+    security-token: ${WORKFLOW_SECURITY_TOKEN:}
+    security-name: ${WORKFLOW_SECURITY_NAME:security-reviewer}
   storage:
     directory: ${URL_STORAGE_DIRECTORY:./data}
   rate-limit:

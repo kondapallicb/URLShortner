@@ -6,8 +6,12 @@ public record GovernancePolicy(
         int maxRetries,
         boolean requireSecurityReview,
         boolean requireHumanApprovalForHighImpactChanges,
-        List<String> guardrails
+        List<String> guardrails,
+        boolean permitRecordedDefaults
 ) {
+    public GovernancePolicy(int maxRetries, boolean security, boolean human, List<String> guardrails) {
+        this(maxRetries, security, human, guardrails, true);
+    }
     public static GovernancePolicy defaultPolicy() {
         return new GovernancePolicy(
                 2,
