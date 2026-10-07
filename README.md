@@ -15,6 +15,34 @@ This foundation commit establishes:
 - Initial orchestration stage model
 - Smoke tests
 
+## Core URL APIs
+
+Create a short URL:
+
+```bash
+curl -X POST http://localhost:8080/api/urls \
+  -H 'Content-Type: application/json' \
+  -d '{"longUrl":"https://example.com/articles/agentic-engineering","ttlSeconds":86400}'
+```
+
+Example response:
+
+```json
+{
+  "slug": "AbC123x",
+  "shortUrl": "http://localhost:8080/AbC123x",
+  "longUrl": "https://example.com/articles/agentic-engineering",
+  "createdAt": "2026-10-06T18:00:00Z",
+  "expiresAt": "2026-10-07T18:00:00Z"
+}
+```
+
+Redirect:
+
+```bash
+curl -i http://localhost:8080/AbC123x
+```
+
 ## Run
 
 ```bash
