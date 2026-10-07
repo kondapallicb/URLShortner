@@ -4,6 +4,8 @@ Spring Boot prototype for a URL shortener service with an agentic SDLC orchestra
 
 The assignment goal is not only to build URL shortening APIs, but to demonstrate governed engineering automation: requirement understanding, task decomposition, implementation, validation, documentation, release readiness, approval gates, retries, fallback, rollback, safe-stop controls, and audit-grade traceability.
 
+For a full commit-by-commit implementation walkthrough, see [IMPLEMENTATION_STEPS.md](IMPLEMENTATION_STEPS.md).
+
 ## Current Commit Scope
 
 The repository now contains the complete six-commit prototype:
