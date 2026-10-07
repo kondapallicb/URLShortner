@@ -31,6 +31,7 @@ class DefaultUrlShorteningServiceTest {
 
         ShortUrl shortUrl = service.create(new CreateShortUrlCommand(
                 URI.create("https://example.com"),
+                null,
                 null
         ));
 
@@ -56,7 +57,8 @@ class DefaultUrlShorteningServiceTest {
 
         ShortUrl shortUrl = service.create(new CreateShortUrlCommand(
                 URI.create("https://new.example"),
-                120L
+                120L,
+                null
         ));
 
         assertThat(shortUrl.slug()).isEqualTo("free002");
@@ -79,6 +81,52 @@ class DefaultUrlShorteningServiceTest {
 
         assertThatThrownBy(() -> service.resolve("expired"))
                 .isInstanceOf(UrlMappingExpiredException.class);
+    }
+
+    @Test
+    void reusesMappingForIdempotencyKey() {
+        DefaultUrlShorteningService service = new DefaultUrlShorteningService(
+                repository,
+                new StubSlugGenerator("first01", "second2"),
+                clock
+        );
+
+        ShortUrl first = service.create(new CreateShortUrlCommand(
+                URI.create("https://example.com"),
+                null,
+                "request-123"
+        ));
+        ShortUrl second = service.create(new CreateShortUrlCommand(
+                URI.create("https://example.com"),
+                null,
+                "request-123"
+        ));
+
+        assertThat(second.slug()).isEqualTo(first.slug());
+    }
+
+    @Test
+    void recordsClickAnalyticsWhenResolvingRedirect() {
+        DefaultUrlShorteningService service = new DefaultUrlShorteningService(
+                repository,
+                new StubSlugGenerator("click01"),
+                clock
+        );
+        ShortUrl shortUrl = service.create(new CreateShortUrlCommand(
+                URI.create("https://example.com"),
+                null,
+                null
+        ));
+
+        service.resolveAndRecordClick(shortUrl.slug(), new RecordClickCommand(
+                "127.0.0.1",
+                "JUnit",
+                "https://referrer.example"
+        ));
+
+        assertThat(service.analytics(shortUrl.slug()).totalClicks()).isEqualTo(1);
+        assertThat(service.analytics(shortUrl.slug()).lastAccessedAt())
+                .isEqualTo(Instant.parse("2026-10-06T18:00:00Z"));
     }
 
     private static final class StubSlugGenerator implements SlugGenerator {

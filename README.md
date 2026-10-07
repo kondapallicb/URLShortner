@@ -22,6 +22,7 @@ Create a short URL:
 ```bash
 curl -X POST http://localhost:8080/api/urls \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: demo-request-1' \
   -d '{"longUrl":"https://example.com/articles/agentic-engineering","ttlSeconds":86400}'
 ```
 
@@ -42,6 +43,19 @@ Redirect:
 ```bash
 curl -i http://localhost:8080/AbC123x
 ```
+
+Fetch analytics:
+
+```bash
+curl http://localhost:8080/api/urls/AbC123x/analytics
+```
+
+Reliability controls currently include:
+
+- Idempotent URL creation using the optional `Idempotency-Key` header
+- Redirect click recording with timestamp, client IP, user agent, and referrer metadata
+- Per-client in-memory API rate limiting for `/api/**` endpoints
+- Structured error responses for validation, missing URLs, expired URLs, and rate limit failures
 
 ## Run
 

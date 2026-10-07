@@ -12,17 +12,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.kondapallicb.urlshortener.application.UrlShorteningService;
 import com.kondapallicb.urlshortener.domain.ShortUrl;
+import com.kondapallicb.urlshortener.domain.UrlAnalytics;
 import java.net.URI;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(controllers = {UrlController.class, GlobalExceptionHandler.class})
+@AutoConfigureMockMvc(addFilters = false)
 class UrlControllerTest {
 
     @Autowired
@@ -69,12 +72,28 @@ class UrlControllerTest {
 
     @Test
     void redirectsToLongUrl() throws Exception {
-        when(urlShorteningService.resolve("AbC123x"))
+        when(urlShorteningService.resolveAndRecordClick(any(), any()))
                 .thenReturn(URI.create("https://example.com/articles/agentic-engineering"));
 
         mockMvc.perform(get("/AbC123x"))
                 .andExpect(status().isFound())
                 .andExpect(header().string(HttpHeaders.LOCATION, "https://example.com/articles/agentic-engineering"))
                 .andExpect(redirectedUrl("https://example.com/articles/agentic-engineering"));
+    }
+
+    @Test
+    void returnsAnalytics() throws Exception {
+        when(urlShorteningService.analytics("AbC123x")).thenReturn(new UrlAnalytics(
+                "AbC123x",
+                3,
+                Instant.parse("2026-10-06T18:00:00Z"),
+                Instant.parse("2026-11-05T18:00:00Z"),
+                Instant.parse("2026-10-06T18:10:00Z")
+        ));
+
+        mockMvc.perform(get("/api/urls/AbC123x/analytics"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.slug", equalTo("AbC123x")))
+                .andExpect(jsonPath("$.totalClicks", equalTo(3)));
     }
 }

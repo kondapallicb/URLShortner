@@ -32,4 +32,10 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.GONE)
                 .body(ErrorResponse.of("URL_EXPIRED", exception.getMessage(), List.of()));
     }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleRateLimit(RateLimitExceededException exception) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(ErrorResponse.of("RATE_LIMIT_EXCEEDED", exception.getMessage(), List.of()));
+    }
 }

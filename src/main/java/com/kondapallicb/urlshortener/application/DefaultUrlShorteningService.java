@@ -2,6 +2,8 @@ package com.kondapallicb.urlshortener.application;
 
 import com.kondapallicb.urlshortener.domain.ShortUrl;
 import com.kondapallicb.urlshortener.domain.SlugGenerator;
+import com.kondapallicb.urlshortener.domain.UrlAnalytics;
+import com.kondapallicb.urlshortener.domain.UrlClickEvent;
 import com.kondapallicb.urlshortener.domain.UrlMappingExpiredException;
 import com.kondapallicb.urlshortener.domain.UrlMappingNotFoundException;
 import com.kondapallicb.urlshortener.domain.UrlMappingRepository;
@@ -33,25 +35,60 @@ public class DefaultUrlShorteningService implements UrlShorteningService {
 
     @Override
     public ShortUrl create(CreateShortUrlCommand command) {
+        if (hasIdempotencyKey(command)) {
+            return repository.findByIdempotencyKey(command.idempotencyKey())
+                    .orElseGet(() -> createNewMapping(command));
+        }
+        return createNewMapping(command);
+    }
+
+    @Override
+    public URI resolve(String slug) {
+        return findActiveMapping(slug).longUrl();
+    }
+
+    @Override
+    public URI resolveAndRecordClick(String slug, RecordClickCommand command) {
+        ShortUrl shortUrl = findActiveMapping(slug);
+        repository.recordClick(new UrlClickEvent(
+                shortUrl.slug(),
+                Instant.now(clock),
+                command.clientIp(),
+                command.userAgent(),
+                command.referer()
+        ));
+        return shortUrl.longUrl();
+    }
+
+    @Override
+    public UrlAnalytics analytics(String slug) {
+        findActiveMapping(slug);
+        return repository.analyticsFor(slug);
+    }
+
+    private ShortUrl createNewMapping(CreateShortUrlCommand command) {
         Instant now = Instant.now(clock);
         Instant expiresAt = now.plus(resolveTtl(command.ttlSeconds()));
         for (int attempt = 0; attempt < MAX_SLUG_ATTEMPTS; attempt++) {
             String slug = slugGenerator.generate();
             if (repository.findBySlug(slug).isEmpty()) {
-                return repository.save(new ShortUrl(slug, command.longUrl(), now, expiresAt));
+                ShortUrl saved = repository.save(new ShortUrl(slug, command.longUrl(), now, expiresAt));
+                if (hasIdempotencyKey(command)) {
+                    repository.saveIdempotencyKey(command.idempotencyKey(), saved.slug());
+                }
+                return saved;
             }
         }
         throw new IllegalStateException("Unable to allocate a unique short URL slug");
     }
 
-    @Override
-    public URI resolve(String slug) {
+    private ShortUrl findActiveMapping(String slug) {
         ShortUrl shortUrl = repository.findBySlug(slug)
                 .orElseThrow(() -> new UrlMappingNotFoundException(slug));
         if (shortUrl.isExpired(Instant.now(clock))) {
             throw new UrlMappingExpiredException(slug);
         }
-        return shortUrl.longUrl();
+        return shortUrl;
     }
 
     private Duration resolveTtl(Long ttlSeconds) {
@@ -59,5 +96,9 @@ public class DefaultUrlShorteningService implements UrlShorteningService {
             return DEFAULT_TTL;
         }
         return Duration.ofSeconds(ttlSeconds);
+    }
+
+    private boolean hasIdempotencyKey(CreateShortUrlCommand command) {
+        return command.idempotencyKey() != null && !command.idempotencyKey().isBlank();
     }
 }

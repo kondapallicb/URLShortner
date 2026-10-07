@@ -14,3 +14,8 @@ management:
 
 server:
   port: 8080
+
+app:
+  rate-limit:
+    max-requests: 60
+    window-seconds: 60
