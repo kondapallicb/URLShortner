@@ -35,11 +35,27 @@ public class DefaultUrlShorteningService implements UrlShorteningService {
 
     @Override
     public ShortUrl create(CreateShortUrlCommand command) {
-        if (hasIdempotencyKey(command)) {
-            return repository.findByIdempotencyKey(command.idempotencyKey())
-                    .orElseGet(() -> createNewMapping(command));
+        if (command.customAlias() != null && (!command.customAlias().matches("[A-Za-z0-9_-]{3,64}")
+                || java.util.Set.of("api", "actuator").contains(command.customAlias()))) {
+            throw new IllegalArgumentException("Invalid or reserved alias");
         }
-        return createNewMapping(command);
+        // The repository monitor binds lookup and insert across service instances in this process.
+        synchronized (repository) {
+            if (hasIdempotencyKey(command)) {
+                var existing = repository.findByIdempotencyKey(command.idempotencyKey());
+                if (existing.isPresent()) {
+                    ShortUrl mapping = existing.get();
+                    if (!repository.idempotencyPayload(command.idempotencyKey()).orElse("").equals(payload(command))
+                            || !mapping.longUrl().equals(command.longUrl())
+                            || !Duration.between(mapping.createdAt(), mapping.expiresAt()).equals(resolveTtl(command.ttlSeconds()))
+                            || (command.customAlias() != null && !command.customAlias().equals(mapping.slug()))) {
+                        throw new com.kondapallicb.urlshortener.domain.IdempotencyConflictException();
+                    }
+                    return mapping;
+                }
+            }
+            return createNewMapping(command);
+        }
     }
 
     @Override
@@ -62,21 +78,24 @@ public class DefaultUrlShorteningService implements UrlShorteningService {
 
     @Override
     public UrlAnalytics analytics(String slug) {
-        findActiveMapping(slug);
+        repository.findBySlug(slug).orElseThrow(() -> new UrlMappingNotFoundException(slug));
         return repository.analyticsFor(slug);
     }
+
+    @Override public ShortUrl deactivate(String slug) { return repository.deactivate(slug); }
 
     private ShortUrl createNewMapping(CreateShortUrlCommand command) {
         Instant now = Instant.now(clock);
         Instant expiresAt = now.plus(resolveTtl(command.ttlSeconds()));
         for (int attempt = 0; attempt < MAX_SLUG_ATTEMPTS; attempt++) {
-            String slug = slugGenerator.generate();
-            if (repository.findBySlug(slug).isEmpty()) {
-                ShortUrl saved = repository.save(new ShortUrl(slug, command.longUrl(), now, expiresAt));
-                if (hasIdempotencyKey(command)) {
-                    repository.saveIdempotencyKey(command.idempotencyKey(), saved.slug());
-                }
+            String slug = command.customAlias() == null ? slugGenerator.generate() : command.customAlias();
+            try {
+                ShortUrl saved = repository.reserve(new ShortUrl(slug, command.longUrl(), now, expiresAt),
+                        command.idempotencyKey(), payload(command));
                 return saved;
+            } catch (com.kondapallicb.urlshortener.domain.SlugConflictException collision) {
+                if (command.customAlias() != null) throw collision;
+                // The atomic insert is authoritative; retry with a fresh slug.
             }
         }
         throw new IllegalStateException("Unable to allocate a unique short URL slug");
@@ -85,7 +104,7 @@ public class DefaultUrlShorteningService implements UrlShorteningService {
     private ShortUrl findActiveMapping(String slug) {
         ShortUrl shortUrl = repository.findBySlug(slug)
                 .orElseThrow(() -> new UrlMappingNotFoundException(slug));
-        if (shortUrl.isExpired(Instant.now(clock))) {
+        if (!shortUrl.active() || shortUrl.isExpired(Instant.now(clock))) {
             throw new UrlMappingExpiredException(slug);
         }
         return shortUrl;
@@ -100,5 +119,10 @@ public class DefaultUrlShorteningService implements UrlShorteningService {
 
     private boolean hasIdempotencyKey(CreateShortUrlCommand command) {
         return command.idempotencyKey() != null && !command.idempotencyKey().isBlank();
+    }
+
+    private String payload(CreateShortUrlCommand command) {
+        return command.longUrl() + "\n" + resolveTtl(command.ttlSeconds()).getSeconds() + "\n"
+                + (command.customAlias() == null ? "" : command.customAlias());
     }
 }

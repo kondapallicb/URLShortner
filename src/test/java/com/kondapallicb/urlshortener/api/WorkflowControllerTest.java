@@ -31,6 +31,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(controllers = {WorkflowController.class, GlobalExceptionHandler.class})
+@org.springframework.context.annotation.Import(com.kondapallicb.urlshortener.application.TimeConfiguration.class)
 @AutoConfigureMockMvc(addFilters = false)
 class WorkflowControllerTest {
 
@@ -42,6 +43,9 @@ class WorkflowControllerTest {
 
     @MockBean
     private ScenarioCatalog scenarioCatalog;
+
+    @MockBean
+    private com.kondapallicb.urlshortener.orchestration.WorkspaceExecutionService execution;
 
     @Test
     void startsWorkflow() throws Exception {
@@ -62,13 +66,14 @@ class WorkflowControllerTest {
 
     @Test
     void approvesWorkflowGate() throws Exception {
-        when(workflowEngine.approve(eq("run-1"), eq("lead"), eq("approved"))).thenReturn(sampleRun());
+        when(workflowEngine.approve(eq("run-1"), eq("lead"), eq("approved"), eq("hash"))).thenReturn(sampleRun());
 
         mockMvc.perform(post("/api/workflows/run-1/approvals")
+                        .principal(() -> "lead")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "approver": "lead",
+                                  "evidenceHash": "hash",
                                   "comment": "approved"
                                 }
                                 """))

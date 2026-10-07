@@ -13,6 +13,23 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleInvalid(IllegalArgumentException exception) {
+        return ResponseEntity.badRequest().body(ErrorResponse.of("INVALID_REQUEST", exception.getMessage(), List.of()));
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidState(IllegalStateException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of("INVALID_STATE", exception.getMessage(), List.of()));
+    }
+
+    @ExceptionHandler({com.kondapallicb.urlshortener.domain.IdempotencyConflictException.class,
+            com.kondapallicb.urlshortener.domain.SlugConflictException.class})
+    public ResponseEntity<ErrorResponse> handleConflict(IllegalStateException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("CONFLICT", exception.getMessage(), List.of()));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException exception) {
         List<String> details = exception.getBindingResult().getFieldErrors().stream()

@@ -26,6 +26,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(controllers = {UrlController.class, GlobalExceptionHandler.class})
 @AutoConfigureMockMvc(addFilters = false)
+@org.springframework.context.annotation.Import(com.kondapallicb.urlshortener.application.TimeConfiguration.class)
 class UrlControllerTest {
 
     @Autowired

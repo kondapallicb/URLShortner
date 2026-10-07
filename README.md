@@ -1,205 +1,148 @@
-# URL Shortener Agentic System
+# URL Shortener With Governed Engineering Execution
 
-Spring Boot prototype for a URL shortener service with an agentic SDLC orchestration layer.
+Java 21, Spring Boot 3 and Maven. URL shortening includes custom aliases, TTL,
+deactivation, payload-bound idempotency and UTC daily click analytics. A bounded
+engineering worker writes production code and acceptance tests in a copied repository,
+runs Maven, and retains evidence for review. No workflow deploys changes automatically.
 
-The assignment goal is not only to build URL shortening APIs, but to demonstrate governed engineering automation: requirement understanding, task decomposition, implementation, validation, documentation, release readiness, approval gates, retries, fallback, rollback, safe-stop controls, and audit-grade traceability.
+## Setup
 
-For a full commit-by-commit implementation walkthrough, see [IMPLEMENTATION_STEPS.md](IMPLEMENTATION_STEPS.md).
-
-## Current Commit Scope
-
-The repository now contains the complete six-commit prototype:
-
-- Spring Boot 3 project structure
-- Java 21 Maven build
-- Core URL shortening and redirect APIs
-- Analytics, idempotency, and rate limiting controls
-- Governed agentic SDLC orchestration graph
-- Greenfield, brownfield, and ambiguous scenario demonstrations
-- Architecture, observability, and release readiness summary
-
-## Architecture Overview
-
-The service uses a layered, ports-and-adapters style:
-
-| Layer | Responsibility |
-| --- | --- |
-| `api` | REST controllers, request/response DTOs, validation, structured errors |
-| `application` | URL shortening use cases, click recording, clock boundary |
-| `domain` | URL mappings, analytics records, repository ports, domain exceptions |
-| `infrastructure` | In-memory repositories and base62 slug generation |
-| `orchestration` | Workflow graph, scenario catalog, approvals, decision lineage, metrics |
-| `observability` | System status and final engineering summary |
-
-Primary control flow:
-
-1. `POST /api/urls` validates a long URL, applies idempotency if supplied, generates or reuses a slug, and returns the short link.
-2. `GET /{slug}` verifies the mapping is active, records a click event, and redirects.
-3. `GET /api/urls/{slug}/analytics` returns aggregate click metrics.
-4. `POST /api/workflows` starts a scenario-backed SDLC workflow and advances to the next human gate.
-5. `POST /api/workflows/{runId}/approvals` records the approval and resumes orchestration.
-
-## Core URL APIs
-
-Create a short URL:
+Install JDK 21 and Maven, then run from this repository:
 
 ```bash
-curl -X POST http://localhost:8080/api/urls \
-  -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: demo-request-1' \
-  -d '{"longUrl":"https://example.com/articles/agentic-engineering","ttlSeconds":86400}'
-```
-
-Example response:
-
-```json
-{
-  "slug": "AbC123x",
-  "shortUrl": "http://localhost:8080/AbC123x",
-  "longUrl": "https://example.com/articles/agentic-engineering",
-  "createdAt": "2026-10-06T18:00:00Z",
-  "expiresAt": "2026-10-07T18:00:00Z"
-}
-```
-
-Redirect:
-
-```bash
-curl -i http://localhost:8080/AbC123x
-```
-
-Fetch analytics:
-
-```bash
-curl http://localhost:8080/api/urls/AbC123x/analytics
-```
-
-Reliability controls currently include:
-
-- Idempotent URL creation using the optional `Idempotency-Key` header
-- Redirect click recording with timestamp, client IP, user agent, and referrer metadata
-- Per-client in-memory API rate limiting for `/api/**` endpoints
-- Structured error responses for validation, missing URLs, expired URLs, and rate limit failures
-
-## Agentic SDLC Orchestration
-
-Start a governed workflow:
-
-```bash
-curl -X POST http://localhost:8080/api/workflows \
-  -H 'Content-Type: application/json' \
-  -d '{"scenario":"GREENFIELD","requirement":"Add custom aliases for short URLs"}'
-```
-
-Approve the current human gate:
-
-```bash
-curl -X POST http://localhost:8080/api/workflows/{runId}/approvals \
-  -H 'Content-Type: application/json' \
-  -d '{"approver":"engineering-lead","comment":"Architecture gate approved"}'
-```
-
-The orchestration graph includes requirement understanding, decomposition, architecture/design, implementation, testing, documentation, and release readiness. It tracks dependency order, human gates, decision lineage, retry/rollback counters, success rate, and end-to-end latency.
-
-List the built-in scenario demonstrations:
-
-```bash
-curl http://localhost:8080/api/workflows/scenarios
-```
-
-Included scenarios:
-
-| Scenario | Demonstrates | Review focus |
-| --- | --- | --- |
-| `GREENFIELD` | Custom alias support from a new requirement | decomposition, API contract, validation, release approval |
-| `BROWNFIELD` | Analytics storage refactor | impacted-module reasoning, regression safety, rollback planning |
-| `AMBIGUOUS` | Branded short links | clarification gate, assumption tracking, safe-stop criteria |
-
-Each scenario includes ambiguity notes, decomposition steps, orchestration path, validation plan, approval checkpoints, and expected engineering artifacts.
-
-## Run
-
-```bash
+export WORKFLOW_OPERATOR_TOKEN='replace-with-a-long-random-secret'
+export WORKFLOW_OPERATOR_NAME='engineering-lead'
+mvn verify
 mvn spring-boot:run
 ```
 
-Then call:
+For Homebrew Java 21, set `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`.
+Workflow APIs and deactivation require the configured bearer token. An empty token
+disables access. Use HTTPS for remote access. Audit identity comes from the configured
+operator name, never an approval request body.
+
+## URL APIs
 
 ```bash
-curl http://localhost:8080/api/system/status
+curl -i http://localhost:8080/api/urls \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: campaign-1' \
+  -d '{"longUrl":"https://example.org/campaign","ttlSeconds":86400,"customAlias":"campaign"}'
+curl -i http://localhost:8080/campaign
+curl http://localhost:8080/api/urls/campaign/analytics
+curl -X POST http://localhost:8080/api/urls/campaign/deactivation \
+  -H "Authorization: Bearer $WORKFLOW_OPERATOR_TOKEN"
 ```
 
-Final engineering summary:
+Aliases use 3-64 ASCII letters, digits, underscores or hyphens. `api` and `actuator`
+are reserved. Duplicate aliases and changed payloads under an existing idempotency
+key return 409. Inactive and expired links return 410. Analytics remain accessible
+after deactivation; `dailyClicksUtc` is indexed by UTC date.
+
+Atomic reservation protects slug uniqueness. Repository transactions bind idempotency
+keys to normalized URL, TTL and alias payloads. Rate limiting uses socket addresses,
+ignores forwarded headers, returns `Retry-After`, expires inactive entries and caps
+tracked clients at 10,000. This remains a process-local limiter.
+
+## Execute A Requirement
+
+The worker supports **custom aliases on the existing domain**. It analyzes the existing
+redirect integration and source hash, then plans an additional `/api/aliases` endpoint
+and integration tests. Unsupported requests stop for clarification. Scenario catalog
+entries describe examples; they are not three fully implemented agents.
 
 ```bash
-curl http://localhost:8080/api/system/engineering-summary
+curl http://localhost:8080/api/workflows \
+  -H "Authorization: Bearer $WORKFLOW_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario":"GREENFIELD","requirement":"Add custom aliases"}'
 ```
 
-## Test
+Use the returned run ID:
 
 ```bash
-mvn test
+curl http://localhost:8080/api/workflows/RUN_ID/approval-evidence \
+  -H "Authorization: Bearer $WORKFLOW_OPERATOR_TOKEN"
+curl http://localhost:8080/api/workflows/RUN_ID/approvals \
+  -H "Authorization: Bearer $WORKFLOW_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"evidenceHash":"HASH_FROM_PREVIOUS_RESPONSE","comment":"Approve this plan"}'
+curl http://localhost:8080/api/workflows/RUN_ID/evidence \
+  -H "Authorization: Bearer $WORKFLOW_OPERATOR_TOKEN"
 ```
 
-Testing approach:
+Architecture approval invokes implementation and testing agents. Their structured,
+create-only Java operations are applied in `workflow-evidence/RUN_ID/workspace`.
+The worker runs `mvn --batch-mode --no-transfer-progress verify` with a five-minute
+timeout. Validation requires successful exit, at least two passing and unskipped
+generated acceptance tests, Surefire reports and JaCoCo coverage evidence.
 
-- Controller tests cover system status, URL APIs, analytics, workflow start/approval/status, and scenario listing.
-- Application tests cover slug collision retries, expiry, idempotent create, and click analytics.
-- Orchestration tests cover architecture approval, release approval, completion, scenario-specific ambiguity notes, and safe-stop criteria.
-- Local execution requires JDK 21 and Maven.
+Inspect the generated source and tests in the workspace before applying them to the
+main repository. Evidence includes:
 
-## Release Readiness
+- `operations.json`: generated paths and file contents.
+- `evidence.json`: requirement, baseline/outcome hashes, changed files and attempts.
+- `attempt-N/maven.log`: full compiler and test output, including failures.
+- `attempt-N/test-reports/TEST-*.xml`: discovered tests, failures and durations.
+- `attempt-N/jacoco.xml`: executed coverage counters.
+- `repair.json`: exact repair operations, when applicable.
+- `validated-artifact.jar`: compiled Spring Boot artifact, bound to approval by SHA-256.
 
-Status: `POC_READY_FOR_REVIEW`
+A diagnosed constructor-name compiler error permits one targeted repair and retry.
+Unknown failures, unavailable Maven and timeout stop execution and remove agent-created
+files, verifying the restored baseline source hash. This is a bounded repair policy.
 
-Completed:
+After validation, fetch `approval-evidence` again and approve its new hash to complete
+the workflow. The outcome hash binds source, compiled JAR, results, logs, tests and coverage. Changes
+to source or generated output invalidate approval. Audit decisions store operator
+identity and the exact hash. A completed review does not deploy the workspace.
 
-- Core URL shortener functionality
-- Analytics and reliability controls
-- Governed SDLC orchestration model
-- Required greenfield, brownfield, and ambiguous scenarios
-- Setup, architecture, validation, risk, and limitation documentation
+## Clarification
 
-Required before production:
+Ambiguous requests stop before implementation. Submit a revised requirement:
 
-- Install durable persistence for URLs, clicks, idempotency keys, and workflow runs.
-- Add authentication, authorization, and tenant ownership.
-- Move rate limiting to Redis or an API gateway for multi-instance deployments.
-- Add distributed tracing and production metrics dashboards.
-- Run `mvn test` and CI in an environment with JDK 21 and Maven.
+```bash
+curl http://localhost:8080/api/workflows/OLD_RUN_ID/clarifications \
+  -H "Authorization: Bearer $WORKFLOW_OPERATOR_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"requirement":"Add custom aliases on the existing domain"}'
+```
 
-Rollback plan:
+This creates a new run and archives the previous run as superseded, removing its pending
+approvals. Historical artifacts and decisions remain for audit and cannot authorize
+the revised requirement.
 
-- Revert the latest deployment artifact.
-- Disable workflow start/approval endpoints if governance routing fails.
-- Preserve existing shortened links before migrating from in-memory storage to a database.
+## Persistence And Tests
 
-## Risks and Trade-offs
+URL mappings, payload-bound keys and clicks use atomic `data/urls.json` snapshots.
+Workflow state uses `data/runs/RUN_ID.json`; evidence uses separate per-run directories.
+Restart restores these records. Configure `URL_STORAGE_DIRECTORY` for a persistent
+volume. Storage supports one process, not shared database transactions across instances.
 
-Risks:
+`mvn verify` runs controller, service, concurrent reservation, restart, authentication,
+rate limiting and orchestration tests. Execution tests launch real child Maven builds
+and skip themselves inside children to prevent recursion. Repair evidence remains in
+`target/execution-review/`; other temporary fixtures are removed. Coverage is in
+`target/site/jacoco/index.html`.
 
-- In-memory repositories lose data on restart.
-- Process-local rate limiting does not protect a horizontally scaled deployment.
-- Click analytics metadata needs privacy review before production use.
-- Real LLM-backed agents would require sandboxing, tool allowlists, prompt-injection controls, and stronger audit storage.
+The engineering summary derives review readiness from the latest run, its current
+evidence hash and recorded outcome approval. No run means `NOT_RELEASE_READY`; changed
+evidence means `STALE_EVIDENCE`. Valid completion means `VALIDATED_AND_APPROVED_FOR_REVIEW`,
+which is not a production deployment certification.
 
-Trade-offs:
+## Remaining Assessment Work
 
-- Persistence is intentionally in-memory to keep the assignment focused on design, reviewability, and orchestration.
-- Workflow actions are deterministic to make behavior auditable and testable.
-- Human approvals are explicit API gates so controlled autonomy remains visible.
+This revision establishes one connected execution path. Arbitrary requirements remain
+unsupported. The seven lifecycle phases are fixed, and planning supports one bounded
+capability with repository checks. General requirement decomposition, brownfield refactor
+agents, tenant ownership, multiple operator roles and broad repair policies remain open.
+Unknown additional acceptance criteria need a new agent capability before implementation.
 
-## Final Engineering Summary
+The worker executes trusted local Maven projects as the service user. A copied directory
+is filesystem isolation, not an OS security sandbox. Untrusted repositories require a
+containerized worker with network, filesystem and resource policies. Evidence hashes
+detect changes but local files are not immutable audit storage. Snapshot persistence and
+rate limiting remain process-local. Crash recovery restores recorded state but does not
+automatically resume an interrupted Maven run.
 
-This prototype demonstrates a production-shaped URL shortener plus an agentic SDLC control plane. The URL service covers creation, redirection, TTL expiry, idempotency, click analytics, and reliability controls. The orchestration layer models requirement understanding, task decomposition, architecture/design, implementation, testing, documentation, and release readiness as an explicit dependency graph with approval gates and traceable decisions.
-
-Known limitations are intentionally documented rather than hidden: no durable database, no auth model, no distributed tracing backend, and no live LLM/tool executor. Those are the next hardening steps after review.
-
-## Commit Sequence
-
-1. Initialize Spring Boot URL shortener service
-2. Add core URL shortening and redirect APIs
-3. Add analytics and reliability controls
-4. Implement governed agentic SDLC orchestration graph
-5. Add greenfield, brownfield, and ambiguous orchestration scenarios
-6. Add architecture, observability, and release readiness summary
+The original six-commit history is in [IMPLEMENTATION_STEPS.md](IMPLEMENTATION_STEPS.md).
+That narrative describes the earlier model; this README describes current behavior.

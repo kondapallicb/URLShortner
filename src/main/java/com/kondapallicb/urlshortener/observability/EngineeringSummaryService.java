@@ -6,6 +6,15 @@ import org.springframework.stereotype.Service;
 @Service
 public class EngineeringSummaryService {
 
+    private final com.kondapallicb.urlshortener.orchestration.WorkflowRunRepository runs;
+    private final com.kondapallicb.urlshortener.orchestration.WorkspaceExecutionService execution;
+
+    public EngineeringSummaryService(com.kondapallicb.urlshortener.orchestration.WorkflowRunRepository runs,
+            com.kondapallicb.urlshortener.orchestration.WorkspaceExecutionService execution) {
+        this.runs = runs;
+        this.execution = execution;
+    }
+
     public EngineeringSummary summary() {
         return new EngineeringSummary(
                 "Build a production-shaped URL shortener prototype that also demonstrates governed agentic SDLC orchestration.",
@@ -18,19 +27,19 @@ public class EngineeringSummaryService {
                         "Manual verification can use README curl examples for end-to-end API behavior"
                 ),
                 List.of(
-                        "In-memory repositories lose data on restart",
+                        "Atomic JSON snapshots support one process; shared multi-instance storage needs a database",
                         "Rate limiting is process-local and should move to Redis or API gateway for multiple instances",
                         "Click analytics intentionally stores limited request metadata and needs privacy review before production",
-                        "Workflow agents are modeled deterministically; real LLM/tool execution would need sandboxing and policy enforcement"
+                        "The bounded alias agents execute local Maven; untrusted repository execution needs an OS sandbox"
                 ),
                 List.of(
-                        "Kept persistence in memory to focus assignment effort on design, orchestration, and reviewability",
+                        "Used durable JSON snapshots for a single-instance worker; database transactions remain future work",
                         "Used explicit ports and records so persistence and orchestration adapters can be replaced later",
                         "Modeled approvals as API gates rather than background tasks to keep human ownership visible"
                 ),
                 List.of(
                         "No durable database migrations yet",
-                        "No authenticated user or tenant model yet",
+                        "One configured bearer operator; no tenant ownership or multiple roles yet",
                         "No distributed tracing backend yet",
                         "Local test execution requires JDK 21 and Maven"
                 ),
@@ -38,7 +47,7 @@ public class EngineeringSummaryService {
                         "Add Postgres persistence for URLs, clicks, idempotency keys, and workflow runs",
                         "Add authentication and tenant-aware authorization",
                         "Wire Micrometer dashboards and distributed tracing",
-                        "Replace deterministic orchestration actions with sandboxed agent/tool executors"
+                        "Expand bounded agents into a general planner and containerized worker"
                 )
         );
     }
@@ -50,7 +59,7 @@ public class EngineeringSummaryService {
                         "api: REST controllers, validation DTOs, and structured error handling",
                         "application: URL shortening use cases and clock abstraction",
                         "domain: URL mappings, analytics records, repository ports, and domain exceptions",
-                        "infrastructure: in-memory repositories and base62 slug generation",
+                        "infrastructure: durable JSON repositories and base62 slug generation",
                         "orchestration: governed workflow graph, scenario catalog, approvals, metrics, and audit decisions",
                         "observability: status and final engineering summary"
                 ),
@@ -71,8 +80,21 @@ public class EngineeringSummaryService {
     }
 
     private ReleaseReadiness releaseReadiness() {
+        String status = "NOT_RELEASE_READY";
+        var latest = runs.all().stream().max(java.util.Comparator.comparing(run -> run.updatedAt()));
+        if (latest.isPresent() && latest.get().state() == com.kondapallicb.urlshortener.orchestration.ExecutionState.COMPLETED) {
+            try {
+                String hash = execution.approvalHash(latest.get());
+                boolean approved = latest.get().decisions().stream().anyMatch(decision ->
+                        decision.decision().equals("APPROVED:release-readiness")
+                        && decision.rationale().contains("evidence=" + hash + ";"));
+                if (approved) status = "VALIDATED_AND_APPROVED_FOR_REVIEW";
+            } catch (IllegalStateException stale) {
+                status = "STALE_EVIDENCE";
+            }
+        }
         return new ReleaseReadiness(
-                "POC_READY_FOR_REVIEW",
+                status,
                 List.of(
                         "Core URL APIs implemented",
                         "Analytics and reliability controls implemented",
@@ -81,7 +103,8 @@ public class EngineeringSummaryService {
                         "Setup, testing, architecture, risks, and limitations documented"
                 ),
                 List.of(
-                        "Install JDK 21 and Maven, then run mvn test",
+                        "Inspect durable per-run Maven, test and coverage evidence",
+                        "Require authenticated approvals bound to current source and artifact hashes",
                         "Review approval-gate semantics with product/security stakeholders",
                         "Decide target persistence backend before production hardening"
                 ),

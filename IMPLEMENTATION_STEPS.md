@@ -608,3 +608,9 @@ The completed implementation satisfies the requested six-step build plan and the
 - release readiness and risk documentation
 
 The project is ready for reviewer inspection and for a Maven-based test run in a Java 21 environment.
+# Revision Notice
+
+This document records the original six implementation commits. Descriptions of modeled
+workflow execution, in-memory storage and approval request bodies are historical.
+See [README.md](README.md) for real Maven execution, durable persistence, authentication,
+hash-bound approvals, clarification and the remaining assessment limitations.

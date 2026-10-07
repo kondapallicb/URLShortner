@@ -39,7 +39,8 @@ public class UrlController {
         ShortUrl shortUrl = urlShorteningService.create(new CreateShortUrlCommand(
                 URI.create(request.longUrl()),
                 request.ttlSeconds(),
-                idempotencyKey
+                idempotencyKey,
+                request.customAlias()
         ));
         String shortLink = ServletUriComponentsBuilder.fromCurrentContextPath()
                 .path("/{slug}")
@@ -72,5 +73,10 @@ public class UrlController {
     @GetMapping("/api/urls/{slug}/analytics")
     public UrlAnalytics analytics(@PathVariable String slug) {
         return urlShorteningService.analytics(slug);
+    }
+
+    @PostMapping("/api/urls/{slug}/deactivation")
+    public ShortUrl deactivate(@PathVariable String slug) {
+        return urlShorteningService.deactivate(slug);
     }
 }

@@ -16,11 +16,14 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
     private final WorkflowRunRepository repository;
     private final ScenarioCatalog scenarioCatalog;
     private final Clock clock;
+    private final WorkspaceExecutionService execution;
 
-    public DefaultWorkflowEngine(WorkflowRunRepository repository, ScenarioCatalog scenarioCatalog, Clock clock) {
+    public DefaultWorkflowEngine(WorkflowRunRepository repository, ScenarioCatalog scenarioCatalog, Clock clock,
+            WorkspaceExecutionService execution) {
         this.repository = repository;
         this.scenarioCatalog = scenarioCatalog;
         this.clock = clock;
+        this.execution = execution;
     }
 
     @Override
@@ -58,7 +61,19 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
 
     @Override
     public WorkflowRun approve(String runId, String approver, String comment) {
+        throw new IllegalStateException("Approval requires authenticated identity and an evidence hash");
+    }
+
+    @Override
+    public synchronized WorkflowRun approve(String runId, String approver, String comment, String evidenceHash) {
         WorkflowRun run = get(runId);
+        if (run.state() != ExecutionState.WAITING_FOR_APPROVAL || run.pendingApprovals().isEmpty()) {
+            throw new IllegalStateException("Run has no approvable evidence");
+        }
+        if (approver == null || approver.isBlank() || evidenceHash == null
+                || !evidenceHash.equals(execution.approvalHash(run))) {
+            throw new IllegalStateException("Approval does not match current evidence");
+        }
         List<ApprovalGate> approvals = run.pendingApprovals().stream()
                 .map(gate -> gate.approve(approver, comment))
                 .toList();
@@ -69,7 +84,8 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
             WorkflowStage stage = stageForGate(run, approval.name());
             WorkflowNodeRun waitingNode = nodeRuns.get(stage);
             nodeRuns.put(stage, waitingNode.completed(now, waitingNode.outputs()));
-            decisions.add(new DecisionRecord(now, stage, "APPROVED:" + approval.name(), approval.comment()));
+            decisions.add(new DecisionRecord(now, stage, "APPROVED:" + approval.name(),
+                    "Operator=" + approver + "; evidence=" + evidenceHash + "; comment=" + approval.comment()));
         }
         WorkflowRun approved = new WorkflowRun(
                 run.runId(),
@@ -86,7 +102,21 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 run.startedAt(),
                 now
         );
+        repository.save(approved);
         return repository.save(advance(approved));
+    }
+
+    @Override
+    public synchronized WorkflowRun clarify(String runId, String requirement) {
+        WorkflowRun previous = get(runId);
+        if (requirement == null || requirement.isBlank()) throw new IllegalArgumentException("Revised requirement is required");
+        List<DecisionRecord> decisions = new ArrayList<>(previous.decisions());
+        decisions.add(new DecisionRecord(Instant.now(clock), WorkflowStage.REQUIREMENTS,
+                "SUPERSEDED", "Artifacts and approvals invalidated by revised requirement: " + requirement));
+        repository.save(new WorkflowRun(previous.runId(), previous.scenario(), previous.requirement(), previous.demonstration(),
+                ExecutionState.SAFE_STOPPED, previous.graph(), previous.policy(), previous.nodeRuns(), decisions, List.of(),
+                previous.metrics(), previous.startedAt(), Instant.now(clock)));
+        return start(WorkflowScenario.GREENFIELD, requirement);
     }
 
     private WorkflowRun advance(WorkflowRun run) {
@@ -97,7 +127,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
             for (WorkflowNode node : current.graph().nodes()) {
                 WorkflowNodeRun nodeRun = current.nodeRuns().get(node.stage());
                 if (nodeRun.state() == ExecutionState.PENDING && dependenciesCompleted(current, node)) {
-                    current = executeNode(current, node);
+                    current = repository.save(executeNode(current, node));
                     progressed = true;
                     if (current.state() == ExecutionState.WAITING_FOR_APPROVAL || current.state() == ExecutionState.SAFE_STOPPED) {
                         return current;
@@ -112,21 +142,44 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
         Instant now = Instant.now(clock);
         Map<WorkflowStage, WorkflowNodeRun> nodeRuns = new EnumMap<>(run.nodeRuns());
         WorkflowNodeRun running = nodeRuns.get(node.stage()).running(now);
-        List<String> outputs = outputsFor(run, node);
+        List<String> outputs;
+        boolean stopped = false;
+        int retries = run.metrics().retryCount();
+        int rollbacks = run.metrics().rollbackCount();
+        try {
+            outputs = outputsFor(run, node);
+            stopped = node.stage() == WorkflowStage.REQUIREMENTS
+                    && (run.scenario() == WorkflowScenario.AMBIGUOUS || !execution.supports(run.requirement()));
+            if (node.stage() == WorkflowStage.TESTING) {
+                ExecutionEvidence evidence = execution.evidence(run.runId());
+                stopped = !evidence.readiness().equals("VALIDATED_NOT_RELEASE_APPROVED");
+                retries = Math.max(0, evidence.attempts().size() - 1);
+                rollbacks = evidence.rolledBack() ? 1 : 0;
+            }
+        } catch (RuntimeException failure) {
+            outputs = List.of("Execution stopped: " + failure.getMessage());
+            stopped = true;
+        }
         boolean approvalRequired = node.approvalGate() != null
                 && node.approvalGate().required()
                 && run.pendingApprovals().isEmpty()
                 && run.decisions().stream().noneMatch(decision -> decision.decision().contains(node.approvalGate().name()));
-        WorkflowNodeRun completed = approvalRequired
+        WorkflowNodeRun completed = stopped
+                ? new WorkflowNodeRun(node.stage(), ExecutionState.SAFE_STOPPED, running.attempts(),
+                        running.startedAt(), now, outputs, String.join("; ", outputs))
+                : approvalRequired
                 ? running.waitingForApproval(now, outputs)
                 : running.completed(now, outputs);
         nodeRuns.put(node.stage(), completed);
 
         List<DecisionRecord> decisions = new ArrayList<>(run.decisions());
-        decisions.add(new DecisionRecord(now, node.stage(), approvalRequired ? "WAITING_FOR_APPROVAL" : "COMPLETED", String.join("; ", outputs)));
+        decisions.add(new DecisionRecord(now, node.stage(), stopped ? "SAFE_STOPPED"
+                : approvalRequired ? "WAITING_FOR_APPROVAL" : "COMPLETED", String.join("; ", outputs)));
 
-        List<ApprovalGate> pendingApprovals = approvalRequired ? List.of(node.approvalGate()) : run.pendingApprovals();
-        ExecutionState state = approvalRequired ? ExecutionState.WAITING_FOR_APPROVAL : ExecutionState.RUNNING;
+        List<ApprovalGate> pendingApprovals = stopped ? List.of()
+                : approvalRequired ? List.of(node.approvalGate()) : run.pendingApprovals();
+        ExecutionState state = stopped ? ExecutionState.SAFE_STOPPED
+                : approvalRequired ? ExecutionState.WAITING_FOR_APPROVAL : ExecutionState.RUNNING;
         return new WorkflowRun(
                 run.runId(),
                 run.scenario(),
@@ -138,7 +191,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 nodeRuns,
                 decisions,
                 pendingApprovals,
-                metrics(run.startedAt(), nodeRuns, run.metrics().retryCount(), run.metrics().rollbackCount()),
+                metrics(run.startedAt(), nodeRuns, retries, rollbacks),
                 run.startedAt(),
                 now
         );
@@ -146,13 +199,12 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
 
     private boolean dependenciesCompleted(WorkflowRun run, WorkflowNode node) {
         return node.dependsOn().stream()
-                .allMatch(stage -> run.nodeRuns().get(stage).state() == ExecutionState.COMPLETED
-                        || run.nodeRuns().get(stage).state() == ExecutionState.WAITING_FOR_APPROVAL);
+                .allMatch(stage -> run.nodeRuns().get(stage).state() == ExecutionState.COMPLETED);
     }
 
     private WorkflowRun finalizeIfComplete(WorkflowRun run) {
         boolean allDone = run.nodeRuns().values().stream()
-                .allMatch(nodeRun -> nodeRun.state() == ExecutionState.COMPLETED || nodeRun.state() == ExecutionState.WAITING_FOR_APPROVAL);
+                .allMatch(nodeRun -> nodeRun.state() == ExecutionState.COMPLETED);
         if (!allDone || !run.pendingApprovals().isEmpty()) {
             return run;
         }
@@ -176,12 +228,21 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
     private List<String> outputsFor(WorkflowRun run, WorkflowNode node) {
         return switch (node.stage()) {
             case REQUIREMENTS -> requirementOutputs(run);
-            case DECOMPOSITION -> run.demonstration().decomposition();
-            case ARCHITECTURE_DESIGN -> List.of("Workflow graph selected", "Security and change-control gates attached");
-            case IMPLEMENTATION -> List.of("Code artifacts generated under bounded autonomy", "Rollback point recorded");
-            case TESTING -> run.demonstration().validationPlan();
-            case DOCUMENTATION -> List.of("Architecture and runbook notes generated", "Trade-offs documented");
-            case RELEASE_READINESS -> run.demonstration().expectedArtifacts();
+            case DECOMPOSITION, ARCHITECTURE_DESIGN -> execution.plan(run.requirement());
+            case IMPLEMENTATION -> {
+                if (!run.nodeRuns().get(WorkflowStage.ARCHITECTURE_DESIGN).outputs().equals(execution.plan(run.requirement()))) {
+                    throw new IllegalStateException("Approved source plan changed; clarify and reapprove");
+                }
+                ExecutionEvidence evidence = execution.execute(run.runId(), run.requirement());
+                yield List.of("Applied files: " + evidence.changedFiles(), "Outcome SHA-256: " + evidence.outcomeHash(),
+                        "Evidence: " + evidence.workspace());
+            }
+            case TESTING -> {
+                ExecutionEvidence evidence = execution.evidence(run.runId());
+                yield List.of("Validation: " + evidence.readiness(), "Executed Maven attempts: " + evidence.attempts());
+            }
+            case DOCUMENTATION -> List.of("Durable operations.json and evidence.json record the change and validation");
+            case RELEASE_READINESS -> List.of("Validated outcome awaits authenticated approval of current evidence hash");
         };
     }
 
@@ -190,6 +251,9 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
         outputs.add("Scenario selected: " + run.demonstration().title());
         outputs.add("Requirement normalized: " + run.requirement());
         outputs.addAll(run.demonstration().ambiguityNotes());
+        if (run.scenario() == WorkflowScenario.AMBIGUOUS || !execution.supports(run.requirement())) {
+            outputs.addAll(execution.plan(run.requirement()));
+        }
         return outputs;
     }
 
@@ -208,11 +272,10 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
             int rollbackCount
     ) {
         int completed = (int) nodeRuns.values().stream()
-                .filter(nodeRun -> nodeRun.state() == ExecutionState.COMPLETED
-                        || nodeRun.state() == ExecutionState.WAITING_FOR_APPROVAL)
+                .filter(nodeRun -> nodeRun.state() == ExecutionState.COMPLETED)
                 .count();
         int failed = (int) nodeRuns.values().stream()
-                .filter(nodeRun -> nodeRun.state() == ExecutionState.FAILED)
+                .filter(nodeRun -> nodeRun.state() == ExecutionState.FAILED || nodeRun.state() == ExecutionState.SAFE_STOPPED)
                 .count();
         double successRate = nodeRuns.isEmpty() ? 0 : (double) completed / nodeRuns.size();
         return new OrchestrationMetrics(

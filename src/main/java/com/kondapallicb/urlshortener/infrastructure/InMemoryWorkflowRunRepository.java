@@ -7,10 +7,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import org.springframework.stereotype.Repository;
 
-@Repository
 public class InMemoryWorkflowRunRepository implements WorkflowRunRepository {
 
     private final ConcurrentMap<String, WorkflowRun> runs = new ConcurrentHashMap<>();
+
+    @Override public java.util.List<WorkflowRun> all() { return java.util.List.copyOf(runs.values()); }
 
     @Override
     public WorkflowRun save(WorkflowRun run) {

@@ -12,16 +12,18 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import org.springframework.stereotype.Repository;
 
-@Repository
 public class InMemoryUrlMappingRepository implements UrlMappingRepository {
 
-    private final ConcurrentMap<String, ShortUrl> mappings = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, String> idempotencyKeys = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, List<UrlClickEvent>> clicks = new ConcurrentHashMap<>();
+    protected final ConcurrentMap<String, ShortUrl> mappings = new ConcurrentHashMap<>();
+    protected final ConcurrentMap<String, String> idempotencyKeys = new ConcurrentHashMap<>();
+    protected final ConcurrentMap<String, String> idempotencyPayloads = new ConcurrentHashMap<>();
+    protected final ConcurrentMap<String, List<UrlClickEvent>> clicks = new ConcurrentHashMap<>();
 
     @Override
     public ShortUrl save(ShortUrl shortUrl) {
-        mappings.put(shortUrl.slug(), shortUrl);
+        if (mappings.putIfAbsent(shortUrl.slug(), shortUrl) != null) {
+            throw new com.kondapallicb.urlshortener.domain.SlugConflictException(shortUrl.slug());
+        }
         return shortUrl;
     }
 
@@ -39,6 +41,19 @@ public class InMemoryUrlMappingRepository implements UrlMappingRepository {
     @Override
     public void saveIdempotencyKey(String idempotencyKey, String slug) {
         idempotencyKeys.putIfAbsent(idempotencyKey, slug);
+    }
+
+    @Override public Optional<String> idempotencyPayload(String key) {
+        return Optional.ofNullable(idempotencyPayloads.get(key));
+    }
+
+    @Override public synchronized ShortUrl reserve(ShortUrl mapping, String key, String payload) {
+        ShortUrl saved = save(mapping);
+        if (key != null && !key.isBlank()) {
+            saveIdempotencyKey(key, saved.slug());
+            idempotencyPayloads.put(key, payload);
+        }
+        return saved;
     }
 
     @Override
@@ -64,8 +79,18 @@ public class InMemoryUrlMappingRepository implements UrlMappingRepository {
                     events.size(),
                     shortUrl.createdAt(),
                     shortUrl.expiresAt(),
-                    lastAccessedAt
+                    lastAccessedAt,
+                    events.stream().collect(java.util.stream.Collectors.groupingBy(
+                            event -> event.clickedAt().atZone(java.time.ZoneOffset.UTC).toLocalDate(),
+                            java.util.TreeMap::new, java.util.stream.Collectors.counting()))
             );
         }
+    }
+
+    @Override public ShortUrl deactivate(String slug) {
+        return mappings.compute(slug, (key, mapping) -> {
+            if (mapping == null) throw new com.kondapallicb.urlshortener.domain.UrlMappingNotFoundException(slug);
+            return new ShortUrl(mapping.slug(), mapping.longUrl(), mapping.createdAt(), mapping.expiresAt(), false);
+        });
     }
 }

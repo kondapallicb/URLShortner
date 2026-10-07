@@ -14,6 +14,7 @@ public record CreateShortUrlRequest(
 
         @Min(60)
         @Max(31_536_000)
-        Long ttlSeconds
+        Long ttlSeconds,
+        @Pattern(regexp = "[A-Za-z0-9_-]{3,64}") String customAlias
 ) {
 }

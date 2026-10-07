@@ -13,4 +13,6 @@ public interface UrlShorteningService {
     URI resolveAndRecordClick(String slug, RecordClickCommand command);
 
     UrlAnalytics analytics(String slug);
+
+    ShortUrl deactivate(String slug);
 }

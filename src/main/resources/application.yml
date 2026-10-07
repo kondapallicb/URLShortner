@@ -16,6 +16,11 @@ server:
   port: 8080
 
 app:
+  operator:
+    token: ${WORKFLOW_OPERATOR_TOKEN:}
+    name: ${WORKFLOW_OPERATOR_NAME:operator}
+  storage:
+    directory: ${URL_STORAGE_DIRECTORY:./data}
   rate-limit:
     max-requests: 60
     window-seconds: 60

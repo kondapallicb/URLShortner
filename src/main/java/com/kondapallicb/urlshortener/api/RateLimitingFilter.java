@@ -48,6 +48,7 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         if (!allow(clientKey)) {
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
             response.setContentType("application/json");
+            response.setHeader("Retry-After", Long.toString(windowSeconds));
             response.getWriter().write("""
                     {"code":"RATE_LIMIT_EXCEEDED","message":"Too many requests","details":[]}
                     """);
@@ -56,12 +57,15 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    private boolean allow(String clientKey) {
+    private synchronized boolean allow(String clientKey) {
         Instant now = Instant.now(clock);
         Instant cutoff = now.minusSeconds(windowSeconds);
+        requestLog.entrySet().removeIf(entry -> entry.getValue().isEmpty()
+                || !entry.getValue().peekLast().isAfter(cutoff));
+        if (!requestLog.containsKey(clientKey) && requestLog.size() >= 10_000) return false;
         Deque<Instant> requests = requestLog.computeIfAbsent(clientKey, key -> new ArrayDeque<>());
         synchronized (requests) {
-            while (!requests.isEmpty() && requests.peekFirst().isBefore(cutoff)) {
+            while (!requests.isEmpty() && !requests.peekFirst().isAfter(cutoff)) {
                 requests.removeFirst();
             }
             if (requests.size() >= maxRequests) {
@@ -77,10 +81,6 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     }
 
     private String resolveClientKey(HttpServletRequest request) {
-        String forwardedFor = request.getHeader("X-Forwarded-For");
-        if (forwardedFor != null && !forwardedFor.isBlank()) {
-            return forwardedFor.split(",")[0].trim();
-        }
         return request.getRemoteAddr();
     }
 }

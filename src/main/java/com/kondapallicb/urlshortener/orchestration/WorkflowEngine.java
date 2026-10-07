@@ -7,4 +7,8 @@ public interface WorkflowEngine {
     WorkflowRun get(String runId);
 
     WorkflowRun approve(String runId, String approver, String comment);
+
+    WorkflowRun approve(String runId, String approver, String comment, String evidenceHash);
+
+    WorkflowRun clarify(String runId, String requirement);
 }
