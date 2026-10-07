@@ -77,6 +77,22 @@ curl -X POST http://localhost:8080/api/workflows/{runId}/approvals \
 
 The orchestration graph includes requirement understanding, decomposition, architecture/design, implementation, testing, documentation, and release readiness. It tracks dependency order, human gates, decision lineage, retry/rollback counters, success rate, and end-to-end latency.
 
+List the built-in scenario demonstrations:
+
+```bash
+curl http://localhost:8080/api/workflows/scenarios
+```
+
+Included scenarios:
+
+| Scenario | Demonstrates | Review focus |
+| --- | --- | --- |
+| `GREENFIELD` | Custom alias support from a new requirement | decomposition, API contract, validation, release approval |
+| `BROWNFIELD` | Analytics storage refactor | impacted-module reasoning, regression safety, rollback planning |
+| `AMBIGUOUS` | Branded short links | clarification gate, assumption tracking, safe-stop criteria |
+
+Each scenario includes ambiguity notes, decomposition steps, orchestration path, validation plan, approval checkpoints, and expected engineering artifacts.
+
 ## Run
 
 ```bash

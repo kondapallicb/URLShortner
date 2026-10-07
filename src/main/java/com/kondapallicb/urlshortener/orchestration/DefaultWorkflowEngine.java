@@ -14,10 +14,12 @@ import org.springframework.stereotype.Service;
 public class DefaultWorkflowEngine implements WorkflowEngine {
 
     private final WorkflowRunRepository repository;
+    private final ScenarioCatalog scenarioCatalog;
     private final Clock clock;
 
-    public DefaultWorkflowEngine(WorkflowRunRepository repository, Clock clock) {
+    public DefaultWorkflowEngine(WorkflowRunRepository repository, ScenarioCatalog scenarioCatalog, Clock clock) {
         this.repository = repository;
+        this.scenarioCatalog = scenarioCatalog;
         this.clock = clock;
     }
 
@@ -25,6 +27,8 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
     public WorkflowRun start(WorkflowScenario scenario, String requirement) {
         Instant now = Instant.now(clock);
         WorkflowGraph graph = WorkflowGraph.defaultGraph();
+        ScenarioDemonstration demonstration = scenarioCatalog.findByScenario(scenario)
+                .orElseThrow(() -> new IllegalArgumentException("Unsupported scenario: " + scenario));
         Map<WorkflowStage, WorkflowNodeRun> nodeRuns = new EnumMap<>(WorkflowStage.class);
         for (WorkflowNode node : graph.nodes()) {
             nodeRuns.put(node.stage(), WorkflowNodeRun.pending(node.stage()));
@@ -32,7 +36,8 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
         WorkflowRun run = new WorkflowRun(
                 UUID.randomUUID().toString(),
                 scenario,
-                requirement,
+                requirement == null || requirement.isBlank() ? demonstration.requirement() : requirement,
+                demonstration,
                 ExecutionState.RUNNING,
                 graph,
                 GovernancePolicy.defaultPolicy(),
@@ -70,6 +75,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 run.runId(),
                 run.scenario(),
                 run.requirement(),
+                run.demonstration(),
                 ExecutionState.RUNNING,
                 run.graph(),
                 run.policy(),
@@ -125,6 +131,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 run.runId(),
                 run.scenario(),
                 run.requirement(),
+                run.demonstration(),
                 state,
                 run.graph(),
                 run.policy(),
@@ -153,6 +160,7 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
                 run.runId(),
                 run.scenario(),
                 run.requirement(),
+                run.demonstration(),
                 ExecutionState.COMPLETED,
                 run.graph(),
                 run.policy(),
@@ -167,14 +175,22 @@ public class DefaultWorkflowEngine implements WorkflowEngine {
 
     private List<String> outputsFor(WorkflowRun run, WorkflowNode node) {
         return switch (node.stage()) {
-            case REQUIREMENTS -> List.of("Requirement normalized for " + run.scenario(), "Assumptions captured");
-            case DECOMPOSITION -> List.of("Tasks sequenced with explicit dependencies", "Parallel documentation/testing path identified");
+            case REQUIREMENTS -> requirementOutputs(run);
+            case DECOMPOSITION -> run.demonstration().decomposition();
             case ARCHITECTURE_DESIGN -> List.of("Workflow graph selected", "Security and change-control gates attached");
             case IMPLEMENTATION -> List.of("Code artifacts generated under bounded autonomy", "Rollback point recorded");
-            case TESTING -> List.of("Unit and integration validation planned", "Failure scenarios mapped to retry or safe-stop");
+            case TESTING -> run.demonstration().validationPlan();
             case DOCUMENTATION -> List.of("Architecture and runbook notes generated", "Trade-offs documented");
-            case RELEASE_READINESS -> List.of("Release summary generated", "Human approval required before production change");
+            case RELEASE_READINESS -> run.demonstration().expectedArtifacts();
         };
+    }
+
+    private List<String> requirementOutputs(WorkflowRun run) {
+        List<String> outputs = new ArrayList<>();
+        outputs.add("Scenario selected: " + run.demonstration().title());
+        outputs.add("Requirement normalized: " + run.requirement());
+        outputs.addAll(run.demonstration().ambiguityNotes());
+        return outputs;
     }
 
     private WorkflowStage stageForGate(WorkflowRun run, String gateName) {

@@ -11,13 +11,18 @@ import org.junit.jupiter.api.Test;
 class DefaultWorkflowEngineTest {
 
     private final Clock clock = Clock.fixed(Instant.parse("2026-10-06T18:00:00Z"), ZoneOffset.UTC);
-    private final DefaultWorkflowEngine engine = new DefaultWorkflowEngine(new InMemoryWorkflowRunRepository(), clock);
+    private final DefaultWorkflowEngine engine = new DefaultWorkflowEngine(
+            new InMemoryWorkflowRunRepository(),
+            new DefaultScenarioCatalog(),
+            clock
+    );
 
     @Test
     void startsAndStopsAtArchitectureApprovalGate() {
         WorkflowRun run = engine.start(WorkflowScenario.GREENFIELD, "Build URL shortener");
 
         assertThat(run.state()).isEqualTo(ExecutionState.WAITING_FOR_APPROVAL);
+        assertThat(run.demonstration().title()).isEqualTo("Greenfield: Custom Alias Support");
         assertThat(run.pendingApprovals()).hasSize(1);
         assertThat(run.pendingApprovals().getFirst().name()).isEqualTo("architecture-review");
         assertThat(run.nodeRuns().get(WorkflowStage.REQUIREMENTS).state()).isEqualTo(ExecutionState.COMPLETED);
@@ -42,5 +47,17 @@ class DefaultWorkflowEngineTest {
         assertThat(completed.state()).isEqualTo(ExecutionState.COMPLETED);
         assertThat(completed.pendingApprovals()).isEmpty();
         assertThat(completed.metrics().successRate()).isEqualTo(1.0);
+    }
+
+    @Test
+    void ambiguousScenarioCapturesClarificationAndSafeStopCriteria() {
+        WorkflowRun run = engine.start(WorkflowScenario.AMBIGUOUS, "Support branded short links");
+
+        assertThat(run.demonstration().ambiguityNotes())
+                .contains("Brand ownership verification is undefined");
+        assertThat(run.nodeRuns().get(WorkflowStage.REQUIREMENTS).outputs())
+                .contains("Brand ownership verification is undefined");
+        assertThat(run.demonstration().orchestrationPath())
+                .contains("safe-stop if ownership policy remains undefined");
     }
 }

@@ -1,7 +1,10 @@
 package com.kondapallicb.urlshortener.api;
 
+import com.kondapallicb.urlshortener.orchestration.ScenarioCatalog;
+import com.kondapallicb.urlshortener.orchestration.ScenarioDemonstration;
 import com.kondapallicb.urlshortener.orchestration.WorkflowEngine;
 import com.kondapallicb.urlshortener.orchestration.WorkflowRun;
+import java.util.List;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,9 +18,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class WorkflowController {
 
     private final WorkflowEngine workflowEngine;
+    private final ScenarioCatalog scenarioCatalog;
 
-    public WorkflowController(WorkflowEngine workflowEngine) {
+    public WorkflowController(WorkflowEngine workflowEngine, ScenarioCatalog scenarioCatalog) {
         this.workflowEngine = workflowEngine;
+        this.scenarioCatalog = scenarioCatalog;
+    }
+
+    @GetMapping("/scenarios")
+    public List<ScenarioDemonstration> scenarios() {
+        return scenarioCatalog.all();
     }
 
     @PostMapping

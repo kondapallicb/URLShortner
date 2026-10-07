@@ -8,6 +8,7 @@ public record WorkflowRun(
         String runId,
         WorkflowScenario scenario,
         String requirement,
+        ScenarioDemonstration demonstration,
         ExecutionState state,
         WorkflowGraph graph,
         GovernancePolicy policy,

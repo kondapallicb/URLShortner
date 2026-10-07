@@ -13,6 +13,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.kondapallicb.urlshortener.orchestration.ExecutionState;
 import com.kondapallicb.urlshortener.orchestration.GovernancePolicy;
 import com.kondapallicb.urlshortener.orchestration.OrchestrationMetrics;
+import com.kondapallicb.urlshortener.orchestration.DefaultScenarioCatalog;
+import com.kondapallicb.urlshortener.orchestration.ScenarioCatalog;
 import com.kondapallicb.urlshortener.orchestration.WorkflowEngine;
 import com.kondapallicb.urlshortener.orchestration.WorkflowGraph;
 import com.kondapallicb.urlshortener.orchestration.WorkflowRun;
@@ -37,6 +39,9 @@ class WorkflowControllerTest {
 
     @MockBean
     private WorkflowEngine workflowEngine;
+
+    @MockBean
+    private ScenarioCatalog scenarioCatalog;
 
     @Test
     void startsWorkflow() throws Exception {
@@ -80,12 +85,25 @@ class WorkflowControllerTest {
                 .andExpect(jsonPath("$.graph.nodes", notNullValue()));
     }
 
+    @Test
+    void listsScenarioDemonstrations() throws Exception {
+        when(scenarioCatalog.all()).thenReturn(new DefaultScenarioCatalog().all());
+
+        mockMvc.perform(get("/api/workflows/scenarios"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].scenario", equalTo("GREENFIELD")))
+                .andExpect(jsonPath("$[1].scenario", equalTo("BROWNFIELD")))
+                .andExpect(jsonPath("$[2].scenario", equalTo("AMBIGUOUS")));
+    }
+
     private WorkflowRun sampleRun() {
         Instant now = Instant.parse("2026-10-06T18:00:00Z");
+        var demonstration = new DefaultScenarioCatalog().findByScenario(WorkflowScenario.GREENFIELD).orElseThrow();
         return new WorkflowRun(
                 "run-1",
                 WorkflowScenario.GREENFIELD,
                 "Add custom aliases",
+                demonstration,
                 ExecutionState.WAITING_FOR_APPROVAL,
                 WorkflowGraph.defaultGraph(),
                 GovernancePolicy.defaultPolicy(),
