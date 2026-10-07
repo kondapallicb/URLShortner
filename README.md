@@ -6,14 +6,36 @@ The assignment goal is not only to build URL shortening APIs, but to demonstrate
 
 ## Current Commit Scope
 
-This foundation commit establishes:
+The repository now contains the complete six-commit prototype:
 
 - Spring Boot 3 project structure
 - Java 21 Maven build
-- Health/status endpoint
-- Package boundaries for API, domain, application, infrastructure, orchestration, and observability
-- Initial orchestration stage model
-- Smoke tests
+- Core URL shortening and redirect APIs
+- Analytics, idempotency, and rate limiting controls
+- Governed agentic SDLC orchestration graph
+- Greenfield, brownfield, and ambiguous scenario demonstrations
+- Architecture, observability, and release readiness summary
+
+## Architecture Overview
+
+The service uses a layered, ports-and-adapters style:
+
+| Layer | Responsibility |
+| --- | --- |
+| `api` | REST controllers, request/response DTOs, validation, structured errors |
+| `application` | URL shortening use cases, click recording, clock boundary |
+| `domain` | URL mappings, analytics records, repository ports, domain exceptions |
+| `infrastructure` | In-memory repositories and base62 slug generation |
+| `orchestration` | Workflow graph, scenario catalog, approvals, decision lineage, metrics |
+| `observability` | System status and final engineering summary |
+
+Primary control flow:
+
+1. `POST /api/urls` validates a long URL, applies idempotency if supplied, generates or reuses a slug, and returns the short link.
+2. `GET /{slug}` verifies the mapping is active, records a click event, and redirects.
+3. `GET /api/urls/{slug}/analytics` returns aggregate click metrics.
+4. `POST /api/workflows` starts a scenario-backed SDLC workflow and advances to the next human gate.
+5. `POST /api/workflows/{runId}/approvals` records the approval and resumes orchestration.
 
 ## Core URL APIs
 
@@ -105,13 +127,73 @@ Then call:
 curl http://localhost:8080/api/system/status
 ```
 
+Final engineering summary:
+
+```bash
+curl http://localhost:8080/api/system/engineering-summary
+```
+
 ## Test
 
 ```bash
 mvn test
 ```
 
-## Planned Commit Sequence
+Testing approach:
+
+- Controller tests cover system status, URL APIs, analytics, workflow start/approval/status, and scenario listing.
+- Application tests cover slug collision retries, expiry, idempotent create, and click analytics.
+- Orchestration tests cover architecture approval, release approval, completion, scenario-specific ambiguity notes, and safe-stop criteria.
+- Local execution requires JDK 21 and Maven.
+
+## Release Readiness
+
+Status: `POC_READY_FOR_REVIEW`
+
+Completed:
+
+- Core URL shortener functionality
+- Analytics and reliability controls
+- Governed SDLC orchestration model
+- Required greenfield, brownfield, and ambiguous scenarios
+- Setup, architecture, validation, risk, and limitation documentation
+
+Required before production:
+
+- Install durable persistence for URLs, clicks, idempotency keys, and workflow runs.
+- Add authentication, authorization, and tenant ownership.
+- Move rate limiting to Redis or an API gateway for multi-instance deployments.
+- Add distributed tracing and production metrics dashboards.
+- Run `mvn test` and CI in an environment with JDK 21 and Maven.
+
+Rollback plan:
+
+- Revert the latest deployment artifact.
+- Disable workflow start/approval endpoints if governance routing fails.
+- Preserve existing shortened links before migrating from in-memory storage to a database.
+
+## Risks and Trade-offs
+
+Risks:
+
+- In-memory repositories lose data on restart.
+- Process-local rate limiting does not protect a horizontally scaled deployment.
+- Click analytics metadata needs privacy review before production use.
+- Real LLM-backed agents would require sandboxing, tool allowlists, prompt-injection controls, and stronger audit storage.
+
+Trade-offs:
+
+- Persistence is intentionally in-memory to keep the assignment focused on design, reviewability, and orchestration.
+- Workflow actions are deterministic to make behavior auditable and testable.
+- Human approvals are explicit API gates so controlled autonomy remains visible.
+
+## Final Engineering Summary
+
+This prototype demonstrates a production-shaped URL shortener plus an agentic SDLC control plane. The URL service covers creation, redirection, TTL expiry, idempotency, click analytics, and reliability controls. The orchestration layer models requirement understanding, task decomposition, architecture/design, implementation, testing, documentation, and release readiness as an explicit dependency graph with approval gates and traceable decisions.
+
+Known limitations are intentionally documented rather than hidden: no durable database, no auth model, no distributed tracing backend, and no live LLM/tool executor. Those are the next hardening steps after review.
+
+## Commit Sequence
 
 1. Initialize Spring Boot URL shortener service
 2. Add core URL shortening and redirect APIs
