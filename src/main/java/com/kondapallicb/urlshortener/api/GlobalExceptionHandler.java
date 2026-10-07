@@ -2,6 +2,7 @@ package com.kondapallicb.urlshortener.api;
 
 import com.kondapallicb.urlshortener.domain.UrlMappingExpiredException;
 import com.kondapallicb.urlshortener.domain.UrlMappingNotFoundException;
+import com.kondapallicb.urlshortener.orchestration.WorkflowRunNotFoundException;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -37,5 +38,11 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleRateLimit(RateLimitExceededException exception) {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .body(ErrorResponse.of("RATE_LIMIT_EXCEEDED", exception.getMessage(), List.of()));
+    }
+
+    @ExceptionHandler(WorkflowRunNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleWorkflowNotFound(WorkflowRunNotFoundException exception) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of("WORKFLOW_NOT_FOUND", exception.getMessage(), List.of()));
     }
 }

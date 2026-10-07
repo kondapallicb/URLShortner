@@ -57,6 +57,26 @@ Reliability controls currently include:
 - Per-client in-memory API rate limiting for `/api/**` endpoints
 - Structured error responses for validation, missing URLs, expired URLs, and rate limit failures
 
+## Agentic SDLC Orchestration
+
+Start a governed workflow:
+
+```bash
+curl -X POST http://localhost:8080/api/workflows \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario":"GREENFIELD","requirement":"Add custom aliases for short URLs"}'
+```
+
+Approve the current human gate:
+
+```bash
+curl -X POST http://localhost:8080/api/workflows/{runId}/approvals \
+  -H 'Content-Type: application/json' \
+  -d '{"approver":"engineering-lead","comment":"Architecture gate approved"}'
+```
+
+The orchestration graph includes requirement understanding, decomposition, architecture/design, implementation, testing, documentation, and release readiness. It tracks dependency order, human gates, decision lineage, retry/rollback counters, success rate, and end-to-end latency.
+
 ## Run
 
 ```bash
